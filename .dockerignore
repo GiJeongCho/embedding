@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.vscode/
+.idea/
+.uv/
+uv.lock
+dist/
+build/
+*.egg-info/
+nohup.out
+test/
+src/resources/model/
