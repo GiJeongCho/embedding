@@ -9,5 +9,6 @@ RUN pip install --no-cache-dir .
 
 ENV PYTHONPATH=/app
 
-EXPOSE ${EMBEDDING_PORT}
-CMD ["sh", "-c", "uvicorn src.api:app --host 0.0.0.0 --port ${EMBEDDING_PORT}"]
+
+EXPOSE ${APP_PORT}
+CMD ["sh", "-c", "uvicorn src.api:app --host 0.0.0.0 --port ${APP_PORT}"]

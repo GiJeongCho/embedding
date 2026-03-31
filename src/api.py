@@ -111,4 +111,6 @@ def embed(req: EmbedRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("src.api:app", host="0.0.0.0", port=6002, reload=False)
+    import os
+    port = int(os.getenv("EMBEDDING_PORT", "5000"))
+    uvicorn.run("src.api:app", host="0.0.0.0", port=port, reload=False)
