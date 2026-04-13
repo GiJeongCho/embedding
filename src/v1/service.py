@@ -6,7 +6,7 @@
 import os
 import time
 import logging
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 import torch
@@ -40,16 +40,13 @@ class EmbeddingService:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("임베딩 모델이 로드되지 않았습니다.")
 
-    def embed(
+    def _embed_batch(
         self,
         texts: List[str],
-        max_length: int = 512,
-    ) -> dict:
-        """텍스트 리스트를 임베딩 벡터로 변환합니다."""
-        self._check_ready()
-
-        t0 = time.time()
-
+        max_length: int,
+        normalize: bool,
+    ) -> np.ndarray:
+        """단일 배치를 임베딩합니다."""
         inputs = self.tokenizer(
             texts,
             truncation=True,
@@ -62,8 +59,31 @@ class EmbeddingService:
             outputs = self.model(**inputs)
 
         embeddings = _mean_pooling(outputs, inputs["attention_mask"])
-        embeddings = embeddings.cpu().numpy().astype("float32")
 
+        if normalize:
+            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+
+        return embeddings.cpu().numpy().astype("float32")
+
+    def embed(
+        self,
+        texts: List[str],
+        max_length: int = 512,
+        normalize: bool = True,
+        batch_size: int = 32,
+    ) -> dict:
+        """텍스트 리스트를 임베딩 벡터로 변환합니다."""
+        self._check_ready()
+
+        t0 = time.time()
+        all_embeddings = []
+
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            batch_emb = self._embed_batch(batch, max_length, normalize)
+            all_embeddings.append(batch_emb)
+
+        embeddings = np.concatenate(all_embeddings, axis=0)
         elapsed = time.time() - t0
 
         return {
@@ -73,6 +93,8 @@ class EmbeddingService:
             "usage": {
                 "total_texts": len(texts),
                 "inference_time": round(elapsed, 4),
+                "batch_size": batch_size,
+                "num_batches": len(all_embeddings),
             },
         }
 

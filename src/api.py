@@ -2,7 +2,7 @@ import time
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -56,6 +56,9 @@ app.add_middleware(
 class EmbedRequest(BaseModel):
     texts: List[str] = Field(..., min_length=1, description="임베딩할 텍스트 리스트")
     max_length: int = Field(512, ge=1, le=8192, description="토크나이저 최대 길이")
+    normalize: bool = Field(True, description="L2 정규화 적용 여부")
+    batch_size: int = Field(32, ge=1, le=256, description="배치 처리 크기")
+
 
 
 @app.get("/health")
@@ -85,6 +88,8 @@ def embed(req: EmbedRequest):
         result = service.embed(
             texts=req.texts,
             max_length=req.max_length,
+            normalize=req.normalize,
+            batch_size=req.batch_size,
         )
     except Exception as e:
         logger.error("임베딩 실패: %s", e, exc_info=True)
