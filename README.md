@@ -48,13 +48,37 @@ PYTHONPATH=. uvicorn src.api:app --host 0.0.0.0 --port 6002
 
 ### Docker
 
+> 모델 파일은 이미지에 포함하지 않고 **호스트 볼륨 마운트**로 주입합니다.
+> 아래 명령은 **프로젝트 루트(`~/jenkins/dev/embedding`)** 에서 실행한다고 가정하며,
+> `$(pwd)/src/resources/model` 을 컨테이너의 `/app/src/resources/model` 로 마운트합니다.
+
 ```bash
-docker build -t embedding-server .
-docker run --gpus all -p 6002:6002 \
-  -v /path/to/models:/app/src/resources/model \
-  -e EMBEDDING_PORT=6002 \
-  embedding-server
+cd ~/jenkins/dev/embedding
+
+docker build -t pps/embed:v0.0.1 -f Dockerfile .
+
+docker rm -f embed_v1 2>/dev/null || true
+
+docker run -d -p 5000:5000 -e APP_PORT=5000 --restart always \
+  --gpus all \
+  -v "$(pwd)/src/resources/model:/app/src/resources/model" \
+  --name embed_v1 pps/embed:v0.0.1
+
+docker logs -f embed_v1
 ```
+
+`$(pwd)` 가 `~/jenkins/dev/embedding` 으로 평가되므로 결과적으로
+`~/jenkins/dev/embedding/src/resources/model` 이 컨테이너에 마운트됩니다.
+이 디렉토리 안에는 임베딩과 리랭커 폴더가 모두 있어야 합니다:
+
+```
+src/resources/model/
+├── embedding_qwen3_0_6b/
+└── reranker_qwen3_0_6b/
+```
+
+> 모델이 없다면 먼저 `python test/download_model.py --all` 로 받아두세요.
+> 다른 경로의 모델을 쓰고 싶다면 `$(pwd)/src/resources/model` 자리에 해당 절대경로를 넣으면 됩니다.
 
 ## API
 
