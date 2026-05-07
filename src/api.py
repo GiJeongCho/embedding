@@ -2,7 +2,7 @@ import time
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.v1.service import EmbeddingService
+from src.v1.reranker import RerankerService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 
 service = EmbeddingService()
+reranker_service = RerankerService()
 
 
 def kst_now() -> str:
@@ -31,16 +33,25 @@ async def lifespan(app: FastAPI):
     logger.info("Qwen3 임베딩 모델을 로드합니다...")
     try:
         service.load()
-        logger.info("임베딩 모델 로드 완료. API 서비스 준비됨.")
+        logger.info("임베딩 모델 로드 완료.")
     except Exception as e:
         logger.error("임베딩 모델 로드 실패: %s", e)
+
+    logger.info("Qwen3 리랭커 모델을 로드합니다...")
+    try:
+        reranker_service.load()
+        logger.info("리랭커 모델 로드 완료.")
+    except Exception as e:
+        logger.error("리랭커 모델 로드 실패: %s", e)
+
+    logger.info("API 서비스 준비됨.")
     yield
 
 
 app = FastAPI(
-    title="Qwen3 Embedding API",
-    description="Qwen3 Embedding 모델 기반 텍스트 임베딩 API",
-    version="0.1.0",
+    title="Qwen3 Embedding & Reranker API",
+    description="Qwen3 Embedding/Reranker 모델 기반 임베딩 및 리랭킹 API",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -60,10 +71,27 @@ class EmbedRequest(BaseModel):
     batch_size: int = Field(32, ge=1, le=256, description="배치 처리 크기")
 
 
+class RerankRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="리랭킹 기준 쿼리")
+    documents: List[str] = Field(..., min_length=1, description="후보 문서 리스트")
+    instruction: Optional[str] = Field(
+        None, description="리랭커에게 전달할 추가 지시문 (없으면 기본값 사용)"
+    )
+    top_n: Optional[int] = Field(
+        None, ge=1, description="상위 N개만 반환. None이면 전체 반환"
+    )
+    batch_size: int = Field(8, ge=1, le=64, description="배치 처리 크기")
+    max_length: int = Field(8192, ge=1, le=32768, description="토크나이저 최대 길이")
+
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": service.get_status(), "server_time_kst": kst_now()}
+    return {
+        "status": "ok",
+        "embedding": service.get_status(),
+        "reranker": reranker_service.get_status(),
+        "server_time_kst": kst_now(),
+    }
 
 
 @app.post("/embed")
@@ -110,6 +138,58 @@ def embed(req: EmbedRequest):
 
     print(f"[{response_time}] 응답 완료 ({total_elapsed}s)")
     print(f"  dimension: {result['dimension']}, count: {result['count']}")
+    print(f"{'='*60}\n")
+
+    return response
+
+
+@app.post("/rerank")
+def rerank(req: RerankRequest):
+    """(query, documents) 쌍의 적합도 점수를 계산해 정렬된 결과를 반환합니다."""
+    if reranker_service.model is None:
+        raise HTTPException(status_code=503, detail="리랭커 모델이 아직 로드되지 않았습니다.")
+
+    request_time = kst_now()
+    t0 = time.time()
+
+    print(f"\n{'='*60}")
+    print(f"[{request_time}] POST /rerank")
+    print(f"  query: {req.query[:100]}{'...' if len(req.query) > 100 else ''}")
+    print(f"  documents count: {len(req.documents)}")
+    print(f"  top_n: {req.top_n}, batch_size: {req.batch_size}")
+    for i, doc in enumerate(req.documents[:3]):
+        print(f"  doc[{i}]: {doc[:100]}{'...' if len(doc) > 100 else ''}")
+    if len(req.documents) > 3:
+        print(f"  ... and {len(req.documents) - 3} more")
+
+    try:
+        result = reranker_service.rerank(
+            query=req.query,
+            documents=req.documents,
+            instruction=req.instruction,
+            top_n=req.top_n,
+            batch_size=req.batch_size,
+            max_length=req.max_length,
+        )
+    except Exception as e:
+        logger.error("리랭킹 실패: %s", e, exc_info=True)
+        print(f"[{kst_now()}] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    response_time = kst_now()
+    total_elapsed = round(time.time() - t0, 4)
+
+    response = {
+        **result,
+        "timestamp": {
+            "request_kst": request_time,
+            "response_kst": response_time,
+            "total_elapsed_sec": total_elapsed,
+        },
+    }
+
+    print(f"[{response_time}] 응답 완료 ({total_elapsed}s)")
+    print(f"  returned: {result['count']} / total: {result['usage']['total_documents']}")
     print(f"{'='*60}\n")
 
     return response
